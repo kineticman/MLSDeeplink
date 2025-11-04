@@ -24,6 +24,7 @@ fi
 
 # Ensure output dir exists (your scripts already use ./out)
 mkdir -p out
+rm -f out/mls_tvapple.xml out/mls_tvapple_control.m3u
 
 # Run the pipeline
 /usr/bin/python3 scrape_mls_schedule.py

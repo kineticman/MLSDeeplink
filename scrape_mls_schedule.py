@@ -276,10 +276,10 @@ def main():
         json.dump(sorted_matches, f, indent=2, ensure_ascii=False)
     print(f"{SYM['done']} Saved: out/mls_schedule.json")
 
-    print("\n" + "="*70); print(" SUMMARY"); print("="*70)
+    print("\n" + "="*70); print(" RAW CANVAS SUMMARY"); print("="*70)
     print(f"{SYM['book']} Total matches: {len(matches)}")
 
-    live = [m for m in matches if m.get("airing_type") == "Live"]
+    live = [m for m in matches if (m.get("airing_type") or "").lower() == "live"]
     if live:
         print(f"{SYM['live']} Live: {len(live)}")
 

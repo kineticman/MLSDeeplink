@@ -289,7 +289,7 @@ def write_json(summaries: List[dict], playables: List[dict], out_json: Path) -> 
     out_json.write_text(json.dumps({"summary": summaries, "playables": playables}, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"📝 wrote JSON: {out_json.resolve()}  (summary={len(summaries)}, playables={len(playables)})")
 
-def write_m3u(summaries: List[dict], out_m3u: Path, group: str, base_ch: int) -> None:
+def write_m3u(summaries: List[dict], out_m3u: Path, group: str, base_ch: int) -> int:
     lines = ["#EXTM3U\n"]; ch = base_ch
     for s in summaries:
         url = s.get("primary_url") or s.get("deeplink_url") or ""
@@ -300,6 +300,7 @@ def write_m3u(summaries: List[dict], out_m3u: Path, group: str, base_ch: int) ->
         ch += 1
     out_m3u.write_text("".join(lines), encoding="utf-8")
     print(f"📺 wrote M3U:  {out_m3u.resolve()}  (entries={ch - base_ch})")
+    return (ch - base_ch)
 
 
 
@@ -385,7 +386,7 @@ def write_xmltv(summaries: List[dict], out_xml: Path, base_ch: int, group: str) 
         if hero:        pretty = f"{hero} — {pretty}" if pretty else hero
         if venue:       pretty = f"{pretty} @ {venue}" if pretty else f"@ {venue}"
         subtitle = f"{away} at {home}" if (home or away) else None
-        cats = ["MLS","Soccer","Sports","Sports event"]
+        cats = ["MLS","Soccer","Sports","Sports Event"]
         _emit_programme(parts, chan_id, start_dt, stop_dt, title=title, subtitle=subtitle, desc=(pretty or None), categories=cats, live=True)
 
         # POST placeholders: 1-hour base blocks from ceil_30(stop_dt) to +4h (no desc)
@@ -398,6 +399,7 @@ def write_xmltv(summaries: List[dict], out_xml: Path, base_ch: int, group: str) 
     parts.append('</tv>\n')
     out_xml.write_text("".join(parts), encoding="utf-8")
     print(f"🗓️  wrote XMLTV: {out_xml.resolve()}  (channels={len(summaries)} programmes=varies with placeholders)")
+    return len(summaries)
 
 # -------------------- CLI --------------------
 
@@ -408,10 +410,10 @@ def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     ap.add_argument("--src", default=str(OUT_DIR / 'mls_schedule.json'))
     ap.add_argument("--out-json", default=str(OUT_DIR / 'mls_deeplinks_preview.json'))
-    ap.add_argument("--out-m3u",  default=str(OUT_DIR / 'mls_tvapple_control.m3u'))
-    ap.add_argument("--out-xml",  default=str(OUT_DIR / 'mls_tvapple.xml'))
+    ap.add_argument("--out-m3u",  default=str(OUT_DIR / 'mls.m3u'))
+    ap.add_argument("--out-xml",  default=str(OUT_DIR / 'guide.xml'))
     ap.add_argument("--out-xlsx", default="mls_deeplinks_preview.xlsx")
-    ap.add_argument("--group", default="MLS - AppleTV")
+    ap.add_argument("--group", default="MLS")
     ap.add_argument("--base-ch", type=int, default=9910)
     ap.add_argument("--raw-canvas", default=str(OUT_DIR / 'raw_canvas.json'))
     ap.add_argument("--preview", action="store_true", help="Also write preview JSON")
@@ -422,8 +424,37 @@ def main():
     summaries, playables = build_rows_from_scrapeonly(matches, hero_by_umc, hero_by_title)
     if args.preview:
         write_json(summaries, playables, Path(args.out_json))
-    write_m3u(summaries, Path(args.out_m3u), args.group, args.base_ch)
-    write_xmltv(summaries, Path(args.out_xml), args.base_ch, args.group)
+    m3u_count = write_m3u(summaries, Path(args.out_m3u), args.group, args.base_ch)
+    xml_ch_count = write_xmltv(summaries, Path(args.out_xml), args.base_ch, args.group)
+
+    # --- Clear, step-by-step summary to align expectations ---
+    try:
+        rows = json.loads(Path(args.src).read_text(encoding='utf-8'))
+        total_raw = len(rows)
+        def _down(v):
+            return (v or '').lower()
+        live_rows = [r for r in rows if _down(r.get('airing_type')) == 'live']
+        live_with_teams = [r for r in live_rows if (r.get('team1_name') or '').strip() and (r.get('team2_name') or '').strip()]
+        with_url = [r for r in live_with_teams if (r.get('deep_link') or r.get('url') or '').strip()]
+        print('\n' + '='*70)
+        print(' SUMMARY (Export)')
+        print('='*70)
+        print(f'📚 Raw matches from API: {total_raw}')
+        print(f'🔎 Live only:            {len(live_rows)}')
+        print(f'✅ Live with teams:      {len(live_with_teams)}')
+        print(f'🔗 With a playable URL:  {len(with_url)}')
+        print('-'*70)
+        print(f'📺 M3U entries written:  {m3u_count}')
+        print(f'🗓️  XMLTV channels:       {xml_ch_count}  (programmes vary with placeholders)')
+        print('\nFiles created:')
+        print('  📄 mls_schedule.json - All match data')
+        print('  📄 raw_canvas.json   - Raw API response')
+        print('  📺 out/mls.m3u')
+        print('  🗓️  out/guide.xml')
+        print('\nView matches:')
+        print('  cat out/mls_schedule.json | python3 -m json.tool')
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     main()
