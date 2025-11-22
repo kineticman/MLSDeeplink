@@ -1,1 +1,2 @@
 # No external dependencies; stdlib only
+requests>=2.32.3,<3.0

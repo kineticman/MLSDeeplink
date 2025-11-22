@@ -1,0 +1,23 @@
+services:
+  mlsappletv:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/kineticman/mlsappletv:latest
+    container_name: mlsappletv
+
+    # Host:Container port mapping (env-driven; defaults to 6996 -> 8096)
+    ports:
+      - "${HOST_PORT:-6996}:${PORT:-8096}"
+
+    environment:
+      TZ:         "${TZ:-America/New_York}"
+      PORT:       "${PORT:-8096}"     # templated into nginx.conf at runtime
+      RUN_AT:     "${RUN_AT:-04:17}"  # daily time (HH:MM) in TZ
+      OUTPUT_DIR: "${OUTPUT_DIR:-/out}"
+
+    volumes:
+      - ./out:/out
+      - ./logs:/logs
+
+    restart: unless-stopped

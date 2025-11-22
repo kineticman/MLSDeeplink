@@ -157,12 +157,41 @@ class MLSAPIClient:
                 "end_time": item.get("endAirTime"),
             }
 
+            # Images/Artwork
+            images = {}
+            if item.get("images"):
+                images["main"] = item["images"]
+            if item.get("artwork"):
+                images["artwork"] = item["artwork"]
+            if item.get("thumbnails"):
+                images["thumbnails"] = item["thumbnails"]
+            if item.get("coverArt"):
+                images["coverArt"] = item["coverArt"]
+            if item.get("previewFrame"):
+                images["previewFrame"] = item["previewFrame"]
+            if images:
+                match["images"] = images
+
             # Teams
             competitors = item.get("competitors", [])
             if len(competitors) >= 2:
                 team1 = competitors[0]; team2 = competitors[1]
                 match["team1_name"] = team1.get("name"); match["team1_abbr"] = team1.get("abbreviation"); match["team1_id"] = team1.get("id")
                 match["team2_name"] = team2.get("name"); match["team2_abbr"] = team2.get("abbreviation"); match["team2_id"] = team2.get("id")
+                
+                # Team images
+                if team1.get("images") or team1.get("artwork") or team1.get("logo"):
+                    match["team1_images"] = {k: v for k, v in {
+                        "images": team1.get("images"),
+                        "artwork": team1.get("artwork"),
+                        "logo": team1.get("logo")
+                    }.items() if v}
+                if team2.get("images") or team2.get("artwork") or team2.get("logo"):
+                    match["team2_images"] = {k: v for k, v in {
+                        "images": team2.get("images"),
+                        "artwork": team2.get("artwork"),
+                        "logo": team2.get("logo")
+                    }.items() if v}
 
             # Playables
             playables = item.get("playables", [])
@@ -170,6 +199,21 @@ class MLSAPIClient:
                 p = playables[0]
                 match["playable_id"] = p.get("id")
                 match["playable_type"] = p.get("type")
+                
+                # Playable images - including the special contentImage composite
+                playable_imgs = {}
+                if p.get("images"):
+                    playable_imgs["images"] = p["images"]
+                if p.get("artwork"):
+                    playable_imgs["artwork"] = p["artwork"]
+                
+                # Extract canonicalMetadata.images.contentImage.url - the composite image with team logos!
+                canonical = p.get("canonicalMetadata", {})
+                if canonical.get("images", {}).get("contentImage", {}).get("url"):
+                    playable_imgs["contentImage"] = canonical["images"]["contentImage"]["url"]
+                
+                if playable_imgs:
+                    match["playable_images"] = playable_imgs
 
             # Deep link
             if match["url"]:
@@ -224,6 +268,16 @@ def print_match(match: Dict, index: int, SYM: Dict[str, str]):
     if match.get("playable_id"):
         playable = match["playable_id"]
         print(f"{SYM['film']} {playable[:60]}{'...' if len(playable) > 60 else ''}")
+
+    # Display images if available
+    if match.get("images"):
+        print(f"\n🖼️  Images available: {', '.join(match['images'].keys())}")
+    if match.get("team1_images"):
+        print(f"   Team 1 images: {', '.join(match['team1_images'].keys())}")
+    if match.get("team2_images"):
+        print(f"   Team 2 images: {', '.join(match['team2_images'].keys())}")
+    if match.get("playable_images"):
+        print(f"   Playable images: {', '.join(match['playable_images'].keys())}")
 
     if match.get("deep_link"):
         link = match["deep_link"]
@@ -296,6 +350,16 @@ def main():
     leagues = set(m.get("league") for m in matches if m.get("league"))
     if leagues:
         print(f"{SYM['star']} Leagues: {', '.join(leagues)}")
+
+    # Image statistics
+    matches_with_images = sum(1 for m in matches if m.get("images"))
+    matches_with_team_images = sum(1 for m in matches if m.get("team1_images") or m.get("team2_images"))
+    matches_with_playable_images = sum(1 for m in matches if m.get("playable_images"))
+    
+    print(f"\n🖼️  Images:")
+    print(f"   Matches with event images: {matches_with_images}/{len(matches)}")
+    print(f"   Matches with team images: {matches_with_team_images}/{len(matches)}")
+    print(f"   Matches with playable images: {matches_with_playable_images}/{len(matches)}")
 
     print("\n" + "="*70)
     print(f" {SYM['check']} DONE! {SYM['party']}")
