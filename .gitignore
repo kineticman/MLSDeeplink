@@ -9,3 +9,13 @@ out/
 .DS_Store
 .idea/
 .vscode/
+devtools/
+
+out/
+logs/
+__pycache__/
+*.pyc
+.venv/
+.env
+.DS_Store
+

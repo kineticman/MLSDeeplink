@@ -15,9 +15,9 @@
 
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Optional, Dict, Any, List, Tuple, Optional
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
-import json, html, argparse, re
+import json, html, argparse, re, os
 
 pd = None
 # -------------------- Basics --------------------
@@ -272,6 +272,11 @@ def build_rows_from_scrapeonly(matches: List[dict],
             "primary_playable_id": playable_id,
             "primary_url": page_url,
             "deeplink_url": deeplink,
+            # Preserve image fields from scraper
+            "images": m.get("images"),
+            "team1_images": m.get("team1_images"),
+            "team2_images": m.get("team2_images"),
+            "playable_images": m.get("playable_images"),
         })
 
         if playable_id or deeplink:
@@ -282,6 +287,116 @@ def build_rows_from_scrapeonly(matches: List[dict],
                 "page_url": page_url,
             })
     return summaries, playables
+
+
+# ---- Apple image helpers (inline; stdlib only) ----
+import re as _re_img, urllib.parse as _urlparse_img
+# Match template URLs like /{w}x{h}.{f} OR /{w}x{h}Sports.TVAPrM04.{f}
+_DIM_TPL_RE = _re_img.compile(r"/\{w\}x\{h\}(Sports\.TVAPrM04)?\.\{f\}(\?|$)")
+# Match dimensions like /1920x1080.jpg OR /1920x1080Sports.TVAPrM04.jpg
+_DIM_NUM_RE = _re_img.compile(r"/\d+x\d+(?:Sports)?(?:\.[A-Za-z0-9]+)?\.(png|jpg|jpeg|webp)(\?|$)")
+
+def materialize_apple_thumb(url: str, w: int = 800, h: int = 600, fmt: str = "jpg") -> str:
+    """
+    Convert Apple CDN image URLs to specific dimensions.
+    Defaults to 800x600 (4:3 aspect ratio) JPG for Channels DVR compatibility.
+    Handles both regular URLs and Sports composite URLs.
+    """
+    if not url:
+        return url
+    u = _urlparse_img.unquote(url)
+    
+    # Replace template URLs like /{w}x{h}.{f} or /{w}x{h}Sports.TVAPrM04.{f}
+    if _DIM_TPL_RE.search(u):
+        def repl_template(m):
+            sports_suffix = m.group(1) if m.group(1) else ""  # Sports.TVAPrM04 or empty
+            query_or_end = m.group(2)  # ? or end
+            return f"/{w}x{h}{sports_suffix}.{fmt}{query_or_end}"
+        return _DIM_TPL_RE.sub(repl_template, u)
+    
+    # Replace concrete dimension URLs including Sports composites
+    # /1920x1080Sports.TVAPrM04.jpg?... -> /800x600Sports.TVAPrM04.jpg?...
+    def repl_dims(m):
+        sports_suffix = "Sports.TVAPrM04" if "Sports" in m.group(0) else ""
+        query_or_end = m.group(2)  # Either ? or end of string
+        return f"/{w}x{h}{sports_suffix}.{fmt}{query_or_end}"
+    
+    if _DIM_NUM_RE.search(u):
+        return _DIM_NUM_RE.sub(repl_dims, u)
+    
+    return u
+
+def _gather_img_urls(obj, acc: list[str]) -> None:
+    if obj is None:
+        return
+    if isinstance(obj, str):
+        # Accept URLs with template variables {w}, {h}, {f} which are common in Apple TV APIs
+        if obj.startswith(("http://", "https://")):
+            # Check for image extensions OR template variables
+            has_image_ext = any(ext in obj.lower() for ext in (".png", ".jpg", ".jpeg", ".webp", ".gif"))
+            has_template = "{w}" in obj or "{h}" in obj or "{f}" in obj
+            if has_image_ext or has_template:
+                acc.append(obj)
+                return
+    elif isinstance(obj, dict):
+        # Special handling for common Apple TV image structure keys
+        # Priority order: template URL > url > src > default
+        priority_keys = ["template", "templateUrl", "url", "src", "href"]
+        for key in priority_keys:
+            if key in obj:
+                _gather_img_urls(obj[key], acc)
+        # Then check all other values
+        for k, v in obj.items():
+            if k not in priority_keys:
+                _gather_img_urls(v, acc)
+    elif isinstance(obj, list):
+        for v in obj:
+            _gather_img_urls(v, acc)
+
+def pick_best_image_url(match: dict) -> Optional[str]:
+    """
+    Pick the best image URL from match data.
+    Priority: contentImage composite (has team logos!) > playable images > event images > team logos
+    Returns 4:3 aspect ratio (800x600 JPG) for Channels DVR compatibility.
+    """
+    candidates: list[str] = []
+    
+    # HIGHEST PRIORITY: Check for contentImage in playable_images (the beautiful composite with team logos)
+    playable_imgs = match.get("playable_images")
+    if playable_imgs and isinstance(playable_imgs, dict):
+        content_img = playable_imgs.get("contentImage")
+        if content_img and isinstance(content_img, str):
+            # Transform to 4:3 aspect ratio (800x600 JPG) for Channels DVR
+            return materialize_apple_thumb(content_img, 800, 600, "jpg")
+    
+    # Primary keys from original implementation
+    primary_keys = ("playable_images", "images", "team1_images", "team2_images")
+    
+    # Additional common image field names
+    additional_keys = (
+        "artwork", "artworkUrl", "artwork_url",
+        "thumbnail", "thumbnailUrl", "thumbnail_url", "thumb",
+        "poster", "posterUrl", "poster_url",
+        "cover_art", "coverArt", "cover",
+        "image_url", "imageUrl", "img_url",
+        "hero_images", "heroImages",
+        "event_images", "eventImages"
+    )
+    
+    # Try all keys in priority order
+    for key in primary_keys + additional_keys:
+        if match.get(key):
+            _gather_img_urls(match[key], candidates)
+    
+    seen=set(); uniq=[u for u in candidates if not (u in seen or seen.add(u))]
+    if not uniq: return None
+    # prefer template URLs we can stamp to 800x600.jpg (4:3 for Channels DVR)
+    for u in uniq:
+        uu = _urlparse_img.unquote(u)
+        if "{w}" in uu and "{h}" in uu and "{f}" in uu:
+            return materialize_apple_thumb(u, 800, 600, "jpg")
+    # else normalize first concrete URL to 800x600.jpg (keeps path, swaps size if templated)
+    return materialize_apple_thumb(uniq[0], 800, 600, "jpg")
 
 # -------------------- Writers --------------------
 
@@ -296,7 +411,12 @@ def write_m3u(summaries: List[dict], out_m3u: Path, group: str, base_ch: int) ->
         if not url: continue
         title = s.get("title") or "MLS Match"
         tvg_id = f"mls.apple.{ch}"
-        lines.append(f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{title}" tvg-chno="{ch}" group-title="{group}",{title}\n{url}\n')
+        
+        # Add tvg-logo with 4:3 image for Channels DVR
+        icon_src = pick_best_image_url(s)
+        logo_attr = f' tvg-logo="{icon_src}"' if icon_src else ''
+        
+        lines.append(f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{title}" tvg-chno="{ch}"{logo_attr} group-title="{group}",{title}\n{url}\n')
         ch += 1
     out_m3u.write_text("".join(lines), encoding="utf-8")
     print(f"📺 wrote M3U:  {out_m3u.resolve()}  (entries={ch - base_ch})")
@@ -309,11 +429,13 @@ def write_xlsx_or_csv(*args, **kwargs) -> None:
 
 def _emit_programme(parts: List[str], chan_id: str, start_dt: datetime, stop_dt: datetime,
                     title: str, subtitle: Optional[str]=None, desc: Optional[str]=None,
-                    categories: Optional[List[str]]=None, live: bool=False) -> None:
+                    categories: Optional[List[str]]=None, live: bool=False, icon_src: Optional[str]=None) -> None:
     start_s = start_dt.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S +0000")
     stop_s  = stop_dt.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S +0000")
     parts.append(f'  <programme channel="{html.escape(chan_id)}" start="{start_s}" stop="{stop_s}">\n')
     parts.append(f'    <title lang="en">{html.escape(title)}</title>\n')
+    if icon_src:
+        parts.append(f'    <icon src="{html.escape(icon_src)}"/>\n')
     if subtitle:
         parts.append(f'    <sub-title lang="en">{html.escape(subtitle)}</sub-title>\n')
     if desc:
@@ -322,7 +444,7 @@ def _emit_programme(parts: List[str], chan_id: str, start_dt: datetime, stop_dt:
         for cat in categories:
             parts.append(f'    <category lang="en">{cat}</category>\n')
     if live:
-        parts.append('    <live/>\n')
+        parts.append('    <live>1</live>\n')
     parts.append('  </programme>\n')
 
 def _emit_placeholders(parts: List[str], chan_id: str, window_start: datetime, window_end: datetime,
@@ -387,7 +509,10 @@ def write_xmltv(summaries: List[dict], out_xml: Path, base_ch: int, group: str) 
         if venue:       pretty = f"{pretty} @ {venue}" if pretty else f"@ {venue}"
         subtitle = f"{away} at {home}" if (home or away) else None
         cats = ["MLS","Soccer","Sports","Sports Event"]
-        _emit_programme(parts, chan_id, start_dt, stop_dt, title=title, subtitle=subtitle, desc=(pretty or None), categories=cats, live=True)
+        # choose icon from scraped JSON fields (640x360 png)
+        icon_src = pick_best_image_url(s)
+
+        _emit_programme(parts, chan_id, start_dt, stop_dt, title=title, subtitle=subtitle, desc=(pretty or None), categories=cats, live=True, icon_src=icon_src)
 
         # POST placeholders: 1-hour base blocks from ceil_30(stop_dt) to +4h (no desc)
         post_start = ceil_30(stop_dt)
