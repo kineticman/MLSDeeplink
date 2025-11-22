@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Timezone
-if [ -n "${TZ:-}" ] && [ -e "/usr/share/zoneinfo/$TZ" ]; then
-  ln -sf "/usr/share/zoneinfo/$TZ" /etc/localtime
-  echo "$TZ" > /etc/timezone
+# Timezone (best-effort only; don't spam errors on read-only filesystems)
+if [ -n "${TZ:-}" ] && [ -e "/usr/share/zoneinfo/$TZ" ] && [ -w /etc/localtime ]; then
+  ln -snf "/usr/share/zoneinfo/$TZ" /etc/localtime 2>/dev/null || true
+  echo "$TZ" > /etc/timezone 2>/dev/null || true
 fi
 
 mkdir -p /out /logs
