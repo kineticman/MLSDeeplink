@@ -19,7 +19,7 @@ git clone https://github.com/kineticman/MLSDeeplink.git
 cd MLSDeeplink
 
 # Choose your settings (override as you like)
-export HOST_PORT=80           # host port exposed by Compose
+export HOST_PORT=8096        # host port exposed by Compose
 export PORT=8096             # internal NGINX port inside the container
 export TZ=America/New_York   # container timezone
 export RUN_AT=04:17          # daily time (HH:MM) in TZ
