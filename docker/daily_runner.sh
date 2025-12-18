@@ -13,13 +13,40 @@ ensure_tz() {
   fi
 }
 
-# seconds until the next RUN_AT in TZ
-...
+# Run the actual generator once
+run_generate() {
+  mkdir -p "$OUTPUT_DIR" "$(dirname "$LOG_FILE")"
+  echo "[daily_runner] $(date -Is) starting generate" | tee -a "$LOG_FILE"
+  # TODO: update this line to the real generator command/path for MLSDeeplink
+  python /app/bin/generate_mls.py >>"$LOG_FILE" 2>&1
+  echo "[daily_runner] $(date -Is) finished generate (exit=$?)" | tee -a "$LOG_FILE"
+}
+
+# Seconds until the next RUN_AT in TZ
+secs_until_next_run() {
+  IFS=':' read -r run_hour run_min <<<"$RUN_AT"
+
+  # current time in TZ
+  local now_ts next_ts
+  now_ts=$(TZ="$TZ" date +%s)
+
+  # today at RUN_AT in TZ
+  next_ts=$(TZ="$TZ" date -d "today ${run_hour}:${run_min}:00" +%s)
+
+  # if that time has already passed today, schedule for tomorrow
+  if (( next_ts <= now_ts )); then
+    next_ts=$(TZ="$TZ" date -d "tomorrow ${run_hour}:${run_min}:00" +%s)
+  fi
+
+  echo $(( next_ts - now_ts ))
+}
 
 main() {
   ensure_tz
+
   # Optional warm-up on first boot:
   run_generate
+
   while true; do
     sleep_seconds=$(secs_until_next_run)
     echo "[daily_runner] $(date -Is) sleeping ${sleep_seconds}s until $RUN_AT $TZ" | tee -a "$LOG_FILE"
